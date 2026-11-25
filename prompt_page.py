@@ -55,11 +55,26 @@ def render_prompt_mask(prompt: str, width_px: int, height_px: int, font_size: in
     return mask
 
 def apply_brightness_nudge(background: np.ndarray, mask: Image.Image, delta: float = -128.0) -> np.ndarray:
-    alpha = np.asarray(mask, dtype = np.float32) / 255.0
-    if background.ndim == 3:
-        alpha = alpha[..., np.newaxis]
-    nudged = background.astype(np.float32) + alpha * delta
-    return np.clip(np.rint(nudged), 0, 255).astype(np.uint8)
+    if background.dtype != np.uint8:
+        raise TypeError()
+
+    out = background.copy()
+    if delta == 0.0:
+        return out
+
+    mask_arr = np.asarray(mask, dtype = np.uint8)
+    ys, xs = np.nonzero(mask_arr)
+    if ys.size == 0:
+        return out
+
+    weights = mask_arr[ys, xs].astype(np.float32) / 255.0
+    if out.ndim == 3:
+        nudged = out[ys, xs].astype(np.float32) + weights[:, np.newaxis] * delta
+    else:
+        nudged = out[ys, xs].astype(np.float32) + weights * delta
+
+    out[ys, xs] = np.clip(np.rint(nudged), 0, 255).astype(np.uint8)
+    return out
 
 def build_pdf(output_path: str | Path, prompt: str, dpi: int = 150, delta: float = -128.0, font_size: int = 48,
               font_path: str | Path | None = None) -> Path:
@@ -88,9 +103,23 @@ def build_pdf(output_path: str | Path, prompt: str, dpi: int = 150, delta: float
     return output_path
 
 def build_overlay_rgba(background: np.ndarray, mask: Image.Image, delta: float = -128.0) -> np.ndarray:
-    target_rgb = np.clip(np.rint(background.astype(np.float32) + delta), 0, 255,).astype(np.uint8)
-    alpha = np.asarray(mask, dtype = np.uint8)
-    return np.dstack((target_rgb, alpha))
+    if background.dtype != np.uint8:
+        raise TypeError()
+
+    mask_arr = np.asarray(mask, dtype = np.uint8)
+    rgba = np.empty((background.shape[0], background.shape[1], 4), dtype = np.uint8)
+    rgba[..., :3] = background
+    rgba[..., 3] = 0
+
+    ys, xs = np.nonzero(mask_arr)
+    if ys.size == 0 or delta == 0.0:
+        return rgba
+
+    nudged = background[ys, xs].astype(np.float32) + delta
+    rgba[ys, xs, :3] = np.clip(np.rint(nudged), 0, 255).astype(np.uint8)
+    rgba[ys, xs, 3] = mask_arr[ys, xs]
+    return rgba
+
 
 def inject_into_pdf(input_path: str | Path, output_path: str | Path, prompt: str, dpi: int = 150,
                     delta: float = -128.0, font_size: int = 48, font_path: str | Path | None = None,
@@ -100,34 +129,46 @@ def inject_into_pdf(input_path: str | Path, output_path: str | Path, prompt: str
     if input_path.resolve() == output_path.resolve():
         raise ValueError()
 
-    doc = pymupdf.open(input_path)
+    src_doc = pymupdf.open(input_path)
+    out_doc = pymupdf.open()
     try:
         if pages is not None:
-            page_indices = pages
+            target_pages = set(pages)
         else:
-            page_indices = list(range(len(doc)))
+            target_pages = set(range(len(src_doc)))
 
-        for page_index in page_indices:
-            page = doc[page_index]
-            pix = page.get_pixmap(dpi = dpi, colorspace = pymupdf.csRGB)
-            background = np.frombuffer(pix.samples, dtype = np.uint8).reshape(pix.height, pix.width, pix.n)
-
-            if not prompt or delta == 0.0:
+        for page_index in range(len(src_doc)):
+            out_page = normalize_page_to_letter(out_doc = out_doc, src_doc = src_doc, page_index = page_index)
+            if page_index not in target_pages or not prompt or delta == 0.0:
                 continue
 
-            mask = render_prompt_mask(prompt = prompt, width_px = pix.width, height_px = pix.height,
+            background = rasterize_page_rgb(page = out_page, dpi = dpi)
+            mask = render_prompt_mask(prompt = prompt, width_px = background.shape[1], height_px = background.shape[0],
                                       font_size = font_size, font_path = font_path)
             overlay_rgba = build_overlay_rgba(background = background, mask = mask, delta = delta)
 
             png_buffer = io.BytesIO()
             Image.fromarray(overlay_rgba, mode = "RGBA").save(png_buffer, format = "PNG")
-            page.insert_image(page.rect, stream = png_buffer.getvalue(), overlay = True)
+            out_page.insert_image(out_page.rect, stream = png_buffer.getvalue(), overlay = True)
 
-        doc.save(output_path, deflate = True, deflate_images = True, garbage = 3)
+        out_doc.save(output_path, deflate = True, deflate_images = True, garbage = 3)
     finally:
-        doc.close()
+        out_doc.close()
+        src_doc.close()
 
     return output_path
+
+def normalize_page_to_letter(out_doc: pymupdf.Document, src_doc: pymupdf.Document, page_index: int) -> pymupdf.Page:
+    out_page = out_doc.new_page(width = PAGE_WIDTH_PT, height = PAGE_HEIGHT_PT)
+    try:
+        out_page.show_pdf_page(out_page.rect, src_doc, page_index, keep_proportion = True)
+    except ValueError:
+        pass
+    return out_page
+
+def rasterize_page_rgb(page: pymupdf.Page, dpi: int = 150) -> np.ndarray:
+    pix = page.get_pixmap(dpi = dpi, colorspace = pymupdf.csRGB, alpha = False)
+    return np.frombuffer(pix.samples, dtype = np.uint8).reshape(pix.height, pix.width, 3)
 
 if __name__ == "__main__":
     if len(sys.argv) >= 3:
