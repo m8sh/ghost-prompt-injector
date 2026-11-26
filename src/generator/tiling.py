@@ -2,7 +2,7 @@ from __future__ import annotations
 from PIL import Image, ImageDraw, ImageFont
 from dataclasses import dataclass
 from pathlib import Path
-
+import math
 import numpy as np
 
 POINTS_PER_INCH = 72.0
@@ -192,6 +192,8 @@ def build_prompt_tile(prompt: str, page_width_px: int, page_height_px: int, dpi:
     bbox = probe.multiline_textbbox((0, 0), wrapped, font = font, align = "center", spacing = line_spacing_px)
     block_w = max(1, bbox[2] - bbox[0])
     block_h = max(1, bbox[3] - bbox[1])
+    block_w = max(1, int(math.ceil(block_w)))
+    block_h = max(1, int(math.ceil(block_h)))
 
     block = Image.new("L", (block_w, block_h), color = 0)
     draw = ImageDraw.Draw(block)

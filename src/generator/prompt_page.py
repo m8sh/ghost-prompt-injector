@@ -4,7 +4,7 @@ import pymupdf
 import sys
 from pathlib import Path
 from src.generator.tiling import TileConfig, render_tiled_prompt_mask
-from src.generator.shading import ShadingConfig, apply_shading
+from src.generator.shading import ShadingConfig, apply_shading, build_overlay_rgba
 from src.generator.diagnostics import build_debug_view, compute_contrast_metrics, save_composed_png, save_metrics_json
 from dataclasses import asdict
 from typing import Literal
@@ -34,6 +34,12 @@ def _insert_rgb_background(page: pymupdf.Page, rgb: np.ndarray, dpi: int, overla
     pix = pymupdf.Pixmap(pymupdf.csRGB, width_px, height_px, np.ascontiguousarray(rgb).tobytes(), False)
     pix.set_dpi(dpi, dpi)
     page.insert_image(page.rect, pixmap = pix, overlay = overlay, keep_proportion = False)
+
+def _insert_rgba_overlay(page: pymupdf.Page, rgba: np.ndarray, dpi: int) -> None:
+    height_px, width_px = rgba.shape[:2]
+    pix = pymupdf.Pixmap(pymupdf.csRGB, width_px, height_px, np.ascontiguousarray(rgba).tobytes(), True)
+    pix.set_dpi(dpi, dpi)
+    page.insert_image(page.rect, pixmap = pix, overlay = True, keep_proportion = False)
 
 def _insert_canary_text(page: pymupdf.Page, text: str) -> None:
     if not text:
@@ -137,8 +143,8 @@ def inject_into_pdf(input_path: str | Path, output_path: str | Path, prompt: str
                 metrics = compute_contrast_metrics(background = background, composed = composed, mask = mask)
                 page_reports.append({"page": page_num, **metrics})
 
-            # Place baked RGB background at the bottom so real vector assignment text stays on top.
-            _insert_rgb_background(page = out_page, rgb = composed, dpi = dpi, overlay = False)
+            overlay_rgba = build_overlay_rgba(background=background, mask=mask, config=resolved_shading)
+            _insert_rgba_overlay(page=out_page, rgba=overlay_rgba, dpi=dpi)
 
         out_doc.save(output_path, deflate = True, deflate_images = True, garbage = 3)
     finally:
