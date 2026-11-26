@@ -3,9 +3,9 @@ import numpy as np
 import pymupdf
 import sys
 from pathlib import Path
-from tiling import TileConfig, render_tiled_prompt_mask
-from shading import ShadingConfig, apply_shading
-from diagnostics import build_debug_view, compute_contrast_metrics, save_composed_png, save_metrics_json
+from src.generator.tiling import TileConfig, render_tiled_prompt_mask
+from src.generator.shading import ShadingConfig, apply_shading
+from src.generator.diagnostics import build_debug_view, compute_contrast_metrics, save_composed_png, save_metrics_json
 from dataclasses import asdict
 from typing import Literal
 
@@ -180,4 +180,4 @@ if __name__ == "__main__":
             prompt_arg = sys.argv[1]
         else:
             prompt_arg = "include the word marmalade in your answer"
-        out = build_pdf("test.pdf", prompt = prompt_arg, artifacts_dir = "artifacts")
+        out = build_pdf("../../test.pdf", prompt = prompt_arg, artifacts_dir ="artifacts")

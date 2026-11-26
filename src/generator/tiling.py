@@ -8,7 +8,7 @@ import numpy as np
 POINTS_PER_INCH = 72.0
 DEFAULT_PAGE_HEIGHT_PT = 792.0
 
-FONTS_DIR = Path(__file__).resolve().parent / "fonts"
+FONTS_DIR = Path(__file__).resolve().parents[2] / "fonts"
 
 ATKINSON_FONT_CANDIDATES = (
     FONTS_DIR / "AtkinsonHyperlegibleNext-ExtraBold.ttf",
