@@ -41,12 +41,18 @@ def _validate_inputs(background: np.ndarray, config: ShadingConfig) -> None:
         raise ValueError()
 
 
-def compute_reference_background(background: np.ndarray, config: ShadingConfig) -> np.ndarray:
-    if config.reference_mode == "pixel" or config.blur_radius_px == 0.0:
+def _smooth_background(background: np.ndarray, blur_radius_px: float) -> np.ndarray:
+    if blur_radius_px == 0.0:
         return background
     # Blur in 8-bit RGB via Pillow to avoid allocating a full-page float32 array.
-    blurred = Image.fromarray(background, mode = "RGB").filter(ImageFilter.GaussianBlur(radius = config.blur_radius_px))
+    blurred = Image.fromarray(background, mode = "RGB").filter(ImageFilter.GaussianBlur(radius = blur_radius_px))
     return np.asarray(blurred, dtype = np.uint8)
+
+
+def compute_reference_background(background: np.ndarray, config: ShadingConfig) -> np.ndarray:
+    if config.reference_mode == "pixel":
+        return background
+    return _smooth_background(background = background, blur_radius_px = config.blur_radius_px)
 
 
 def pick_shading_direction(reference_rgb: np.ndarray, luma_midpoint: float = DEFAULT_LUMA_MIDPOINT) -> np.ndarray:
@@ -78,13 +84,16 @@ def apply_shading(background: np.ndarray, mask: Image.Image, config: ShadingConf
     if ys.size == 0:
         return out
 
-    ref_bg = compute_reference_background(background = background, config = config)
+    dir_bg = _smooth_background(background = background, blur_radius_px = config.blur_radius_px)
+    ref_bg = background if config.reference_mode == "pixel" else dir_bg
     bg_pixels = background[ys, xs].astype(np.float32)
     ref_pixels = ref_bg[ys, xs].astype(np.float32)
+    dir_pixels = dir_bg[ys, xs].astype(np.float32)
 
-    directions = pick_shading_direction(reference_rgb = ref_pixels, luma_midpoint = config.luma_midpoint)
+    directions = pick_shading_direction(reference_rgb = dir_pixels, luma_midpoint = config.luma_midpoint)
     signed_offset = directions * float(config.strength)
-    target_rgb = np.clip(_apply_color_space_offset(reference_rgb = ref_pixels, signed_offset = signed_offset, color_space = config.color_space), 0.0, 255.0)
+    target_rgb = np.clip(_apply_color_space_offset(reference_rgb = ref_pixels, signed_offset = signed_offset,
+                                                   color_space = config.color_space), 0.0, 255.0)
 
     weights = (mask_arr[ys, xs].astype(np.float32) / 255.0)[:, np.newaxis]
     blended = bg_pixels + weights * (target_rgb - bg_pixels)
@@ -106,12 +115,15 @@ def build_overlay_rgba(background: np.ndarray, mask: Image.Image, config: Shadin
     if ys.size == 0 or config.strength == 0.0:
         return rgba
 
-    ref_bg = compute_reference_background(background = background, config = config)
+    dir_bg = _smooth_background(background = background, blur_radius_px = config.blur_radius_px)
+    ref_bg = background if config.reference_mode == "pixel" else dir_bg
     ref_pixels = ref_bg[ys, xs].astype(np.float32)
+    dir_pixels = dir_bg[ys, xs].astype(np.float32)
 
-    directions = pick_shading_direction(reference_rgb = ref_pixels, luma_midpoint = config.luma_midpoint)
+    directions = pick_shading_direction(reference_rgb = dir_pixels, luma_midpoint = config.luma_midpoint)
     signed_offset = directions * float(config.strength)
-    target_rgb = _apply_color_space_offset(reference_rgb = ref_pixels, signed_offset = signed_offset, color_space = config.color_space)
+    target_rgb = _apply_color_space_offset(reference_rgb = ref_pixels, signed_offset = signed_offset,
+                                           color_space = config.color_space)
 
     rgba[ys, xs, :3] = np.clip(np.rint(target_rgb), 0, 255).astype(np.uint8)
     rgba[ys, xs, 3] = mask_arr[ys, xs]
